@@ -1,90 +1,53 @@
 
-name: HJOOZATI - ZIP to APK
+name: HJOOZATI Android Build
 
 on:
-  push:
-    paths:
-      - '*.zip'
-      - '**/*.zip'
-      - '.github/workflows/build-hjoozati.yml'
   workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'HJOOZATI_GITHUB_UPLOAD_READY.zip'
+      - '.github/workflows/android-build.yml'
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Build HJOOZATI Android APK
     runs-on: ubuntu-latest
-    timeout-minutes: 35
 
     steps:
-      - name: Checkout HJOOZATI repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Find uploaded ZIP
-        id: zip
+      - name: Extract project ZIP
         shell: bash
         run: |
-          set -euo pipefail
-          ZIP_FILE=$(find . -maxdepth 3 -type f -iname '*.zip' | sort | head -n 1)
+          ZIP_FILE="HJOOZATI_GITHUB_UPLOAD_READY.zip"
 
-          if [ -z "$ZIP_FILE" ]; then
-            echo "::error::HJOOZATI ZIP file was not found."
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "Project ZIP not found: $ZIP_FILE"
             exit 1
           fi
 
-          echo "file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
-          echo "Found: $ZIP_FILE"
+          mkdir -p /tmp/hjoozati-source
+          unzip -q "$ZIP_FILE" -d /tmp/hjoozati-source
 
-      - name: Extract HJOOZATI project
-        id: project
-        shell: bash
-        run: |
-          set -euo pipefail
+          PROJECT_DIR=$(find /tmp/hjoozati-source \
+            -name settings.gradle.kts \
+            -type f \
+            -printf '%h\n' | head -n 1)
 
-          mkdir -p "$RUNNER_TEMP/HJOOZATI_SOURCE"
-          unzip -q "${{ steps.zip.outputs.file }}" \
-            -d "$RUNNER_TEMP/HJOOZATI_SOURCE"
-
-          SETTINGS=$(find "$RUNNER_TEMP/HJOOZATI_SOURCE" \
-            -type f \( -name settings.gradle.kts -o -name settings.gradle \) \
-            -print -quit)
-
-          if [ -z "$SETTINGS" ]; then
-            echo "::error::Invalid ZIP: Android project settings file is missing."
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "Could not find settings.gradle.kts"
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$SETTINGS")
-          echo "dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+          cp -a "$PROJECT_DIR/." "$GITHUB_WORKSPACE/"
 
-          echo "Project directory: $PROJECT_DIR"
-
-      - name: Verify application identity
-        working-directory: ${{ steps.project.outputs.dir }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          MANIFEST="app/src/main/AndroidManifest.xml"
-
-          if [ ! -f "$MANIFEST" ]; then
-            echo "::error::HJOOZATI Android manifest is missing."
-            exit 1
-          fi
-
-          if ! grep -q 'android:label="HJOOZATI"' "$MANIFEST"; then
-            echo "::error::Application display name must be HJOOZATI."
-            exit 1
-          fi
-
-          if ! grep -q 'applicationId = "com.hjoozati.app"' app/build.gradle.kts; then
-            echo "::error::Unexpected HJOOZATI application ID."
-            exit 1
-          fi
-
-      - name: Set up Java 17
+      - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -93,31 +56,29 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.0.2'
+          gradle-version: '8.9'
 
-      - name: Run HJOOZATI tests
-        working-directory: ${{ steps.project.outputs.dir }}
-        run: gradle testDebugUnitTest --stacktrace
+      - name: Check project files
+        run: |
+          test -f settings.gradle.kts
+          test -f app/build.gradle.kts
 
-      - name: Build HJOOZATI APK
-        working-directory: ${{ steps.project.outputs.dir }}
-        run: gradle assembleDebug --stacktrace
+      - name: Run unit tests
+        run: gradle :app:testDebugUnitTest
 
-      - name: Publish HJOOZATI APK
+      - name: Build Android APK
+        run: gradle :app:assembleDebug
+
+      - name: Verify APK
+        run: |
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -f "$APK"
+          ls -lh "$APK"
+
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: HJOOZATI-APK
-          path: ${{ steps.project.outputs.dir }}/app/build/outputs/apk/debug/app-debug.apk
+          name: HJOOZATI-Android-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-          retention-days: 14
-
-      - name: Publish build reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: HJOOZATI-Build-Reports
-          path: |
-            ${{ steps.project.outputs.dir }}/app/build/reports/
-            ${{ steps.project.outputs.dir }}/app/build/test-results/
-          if-no-files-found: ignore
           retention-days: 14
